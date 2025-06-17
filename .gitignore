@@ -1,0 +1,74 @@
+# VHDL Simulation Files
+*.cf
+*.o
+work/
+work_*/
+*.ghw
+*.vcd
+*.fst
+
+# GHDL generated files
+*.exe
+e~*
+
+# Vivado/ISE Files
+*.xpr
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.srcs/
+*.gen/
+*.bit
+*.ltx
+*.rpt
+*.dcp
+*.checkpoint
+
+# Quartus Files
+*.qpf
+*.qsf
+*.qws
+*.sof
+*.pof
+db/
+incremental_db/
+output_files/
+
+# Log Files
+*.log
+*.jou
+transcript
+
+# Temporary Files
+*.tmp
+*.temp
+*~
+.DS_Store
+Thumbs.db
+
+# Build Directories
+build/
+synth/
+impl/
+out/
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated Documentation
+docs/build/
+docs/_build/
+
+# Test Results
+test_results/
+coverage/
+
+# Waveform Files (keep small test waves, ignore large ones)
+*.ghw
+!*_small.ghw
+!*_test.ghw

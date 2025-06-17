@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod:*)",
+      "Bash(./run_sim.sh:*)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(rg:*)",
+      "Bash(timeout:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(ghdl:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(make:*)",
+      "Bash(find:*)",
+      "Bash(./scripts/run_sim.sh:*)",
+      "Bash(./scripts/run_comprehensive_tests.sh:*)"
+    ],
+    "deny": []
+  }
+}
