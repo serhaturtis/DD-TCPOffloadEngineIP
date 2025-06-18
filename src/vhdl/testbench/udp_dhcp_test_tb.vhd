@@ -86,6 +86,12 @@ architecture behavioral of udp_dhcp_test_tb is
     constant UDP_TEST_PORT : std_logic_vector(15 downto 0) := x"1234"; -- Port 4660
     constant UDP_PAYLOAD : string := "Hello UDP World!";
     
+    -- Register addresses (simplified)
+    constant REG_MAC_ADDR_LOW : std_logic_vector(31 downto 0) := x"00000000";
+    constant REG_MAC_ADDR_HIGH : std_logic_vector(31 downto 0) := x"00000004";
+    constant REG_IP_ADDR : std_logic_vector(31 downto 0) := x"00000008";
+    constant REG_CONTROL : std_logic_vector(31 downto 0) := x"00000020";
+    
     -- DUT instantiation
     component tcp_offload_engine_top is
         port (
@@ -138,68 +144,6 @@ architecture behavioral of udp_dhcp_test_tb is
         );
     end component;
     
-    -- AXI4-Lite procedures
-    procedure axi_write(
-        signal clk : in std_logic;
-        signal awaddr : out std_logic_vector(31 downto 0);
-        signal awvalid : out std_logic;
-        signal awready : in std_logic;
-        signal wdata : out std_logic_vector(31 downto 0);
-        signal wstrb : out std_logic_vector(3 downto 0);
-        signal wvalid : out std_logic;
-        signal wready : in std_logic;
-        signal bready : out std_logic;
-        signal bvalid : in std_logic;
-        addr : in std_logic_vector(31 downto 0);
-        data : in std_logic_vector(31 downto 0)
-    ) is
-    begin
-        wait until rising_edge(clk);
-        awaddr <= addr;
-        awvalid <= '1';
-        wdata <= data;
-        wstrb <= "1111";
-        wvalid <= '1';
-        
-        wait until rising_edge(clk) and awready = '1';
-        awvalid <= '0';
-        
-        wait until rising_edge(clk) and wready = '1';
-        wvalid <= '0';
-        
-        bready <= '1';
-        wait until rising_edge(clk) and bvalid = '1';
-        bready <= '0';
-        
-        wait until rising_edge(clk);
-    end procedure;
-    
-    procedure axi_read(
-        signal clk : in std_logic;
-        signal araddr : out std_logic_vector(31 downto 0);
-        signal arvalid : out std_logic;
-        signal arready : in std_logic;
-        signal rready : out std_logic;
-        signal rvalid : in std_logic;
-        signal rdata : in std_logic_vector(31 downto 0);
-        addr : in std_logic_vector(31 downto 0);
-        variable data : out std_logic_vector(31 downto 0)
-    ) is
-    begin
-        wait until rising_edge(clk);
-        araddr <= addr;
-        arvalid <= '1';
-        
-        wait until rising_edge(clk) and arready = '1';
-        arvalid <= '0';
-        
-        rready <= '1';
-        wait until rising_edge(clk) and rvalid = '1';
-        data := rdata;
-        rready <= '0';
-        
-        wait until rising_edge(clk);
-    end procedure;
     
     -- Generate DHCP DISCOVER packet
     function generate_dhcp_discover_packet return byte_array_t is
@@ -210,10 +154,10 @@ architecture behavioral of udp_dhcp_test_tb is
         variable dhcp_payload : byte_array_t(0 to 299); -- DHCP message
     begin
         -- Ethernet header (broadcast)
-        eth_header := generate_ethernet_header(x"FFFFFFFFFFFF", TEST_MAC_ADDR, ETH_TYPE_IP);
+        eth_header := generate_ethernet_header(x"FFFFFFFFFFFF", TEST_MAC_ADDR, x"0800");
         
         -- IP header (UDP to broadcast)
-        ip_header := generate_ip_header(x"00000000", x"FFFFFFFF", IP_PROTO_UDP, 308);
+        ip_header := generate_ip_header(x"00000000", x"FFFFFFFF", x"11", 308);
         
         -- UDP header (DHCP ports 68->67)
         udp_header := generate_udp_header(x"0044", x"0043", 300); -- 68->67, 300 bytes
@@ -276,10 +220,10 @@ architecture behavioral of udp_dhcp_test_tb is
         variable dhcp_payload : byte_array_t(0 to 299); -- DHCP message
     begin
         -- Ethernet header (to client)
-        eth_header := generate_ethernet_header(TEST_MAC_ADDR, DHCP_SERVER_MAC, ETH_TYPE_IP);
+        eth_header := generate_ethernet_header(TEST_MAC_ADDR, DHCP_SERVER_MAC, x"0800");
         
         -- IP header (UDP from server)
-        ip_header := generate_ip_header(DHCP_SERVER_IP, OFFERED_IP, IP_PROTO_UDP, 308);
+        ip_header := generate_ip_header(DHCP_SERVER_IP, OFFERED_IP, x"11", 308);
         
         -- UDP header (DHCP ports 67->68)
         udp_header := generate_udp_header(x"0043", x"0044", 300); -- 67->68, 300 bytes
@@ -355,10 +299,10 @@ architecture behavioral of udp_dhcp_test_tb is
         variable udp_header : byte_array_t(0 to 7);
     begin
         -- Ethernet header
-        eth_header := generate_ethernet_header(TEST_MAC_ADDR, REMOTE_MAC_ADDR, ETH_TYPE_IP);
+        eth_header := generate_ethernet_header(TEST_MAC_ADDR, REMOTE_MAC_ADDR, x"0800");
         
         -- IP header
-        ip_header := generate_ip_header(REMOTE_IP_ADDR, TEST_IP_ADDR, IP_PROTO_UDP, 8 + UDP_PAYLOAD'length);
+        ip_header := generate_ip_header(REMOTE_IP_ADDR, TEST_IP_ADDR, x"11", 8 + UDP_PAYLOAD'length);
         
         -- UDP header
         udp_header := generate_udp_header(UDP_TEST_PORT, UDP_TEST_PORT, UDP_PAYLOAD'length);
@@ -376,68 +320,7 @@ architecture behavioral of udp_dhcp_test_tb is
         return packet;
     end function;
     
-    -- Procedure to send Ethernet frame via AXI Stream
-    procedure send_ethernet_frame(
-        frame_data : byte_array_t
-    ) is
-    begin
-        for i in 0 to frame_data'length-1 loop
-            wait until rising_edge(s_axi_aclk);
-            if i mod 8 = 0 then
-                s_axis_rx_tdata <= (others => '0');
-                s_axis_rx_tkeep <= (others => '0');
-            end if;
-            
-            s_axis_rx_tdata((7-(i mod 8))*8+7 downto (7-(i mod 8))*8) <= frame_data(i);
-            s_axis_rx_tkeep(7-(i mod 8)) <= '1';
-            
-            if i mod 8 = 7 or i = frame_data'length-1 then
-                s_axis_rx_tvalid <= '1';
-                if i = frame_data'length-1 then
-                    s_axis_rx_tlast <= '1';
-                end if;
-                
-                wait until rising_edge(s_axi_aclk) and s_axis_rx_tready = '1';
-                s_axis_rx_tvalid <= '0';
-                s_axis_rx_tlast <= '0';
-            end if;
-        end loop;
-    end procedure;
     
-    -- Function to capture transmitted frame
-    function capture_ethernet_frame(timeout_cycles : natural) return byte_array_t is
-        variable frame_data : byte_array_t(0 to 1500);
-        variable byte_count : natural := 0;
-        variable cycle_count : natural := 0;
-    begin
-        -- Wait for transmission to start
-        while m_axis_tx_tvalid = '0' and cycle_count < timeout_cycles loop
-            wait until rising_edge(s_axi_aclk);
-            cycle_count := cycle_count + 1;
-        end loop;
-        
-        if cycle_count >= timeout_cycles then
-            return frame_data(0 to 0); -- Return empty frame on timeout
-        end if;
-        
-        -- Capture frame data
-        while m_axis_tx_tvalid = '1' loop
-            wait until rising_edge(s_axi_aclk);
-            
-            for i in 0 to 7 loop
-                if m_axis_tx_tkeep(7-i) = '1' and byte_count < frame_data'length then
-                    frame_data(byte_count) := m_axis_tx_tdata((7-i)*8+7 downto (7-i)*8);
-                    byte_count := byte_count + 1;
-                end if;
-            end loop;
-            
-            if m_axis_tx_tlast = '1' then
-                exit;
-            end if;
-        end loop;
-        
-        return frame_data(0 to byte_count-1);
-    end function;
     
 begin
     
@@ -507,7 +390,118 @@ begin
         variable dhcp_offer : byte_array_t(0 to 341);
         variable udp_packet : byte_array_t(0 to 57); -- Ethernet + IP + UDP + 16 bytes payload
         variable captured_frame : byte_array_t(0 to 1500);
+        variable captured_length : natural;
         variable dhcp_success : boolean := false;
+        
+        -- AXI4-Lite procedures
+        procedure axi_write(
+            address : in std_logic_vector(31 downto 0);
+            data : in std_logic_vector(31 downto 0)
+        ) is
+        begin
+            wait until rising_edge(s_axi_aclk);
+            s_axi_awaddr <= address;
+            s_axi_awvalid <= '1';
+            s_axi_wdata <= data;
+            s_axi_wstrb <= "1111";
+            s_axi_wvalid <= '1';
+            s_axi_bready <= '1';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_awready = '1';
+            s_axi_awvalid <= '0';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_wready = '1';
+            s_axi_wvalid <= '0';
+            s_axi_wstrb <= "0000";
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_bvalid = '1';
+            s_axi_bready <= '0';
+        end procedure;
+        
+        procedure axi_read(
+            address : in std_logic_vector(31 downto 0);
+            data : out std_logic_vector(31 downto 0)
+        ) is
+        begin
+            wait until rising_edge(s_axi_aclk);
+            s_axi_araddr <= address;
+            s_axi_arvalid <= '1';
+            s_axi_rready <= '1';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_arready = '1';
+            s_axi_arvalid <= '0';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_rvalid = '1';
+            data := s_axi_rdata;
+            s_axi_rready <= '0';
+        end procedure;
+        
+        -- Procedure to send Ethernet frame via AXI Stream
+        procedure send_ethernet_frame(
+            frame_data : byte_array_t
+        ) is
+        begin
+            for i in 0 to frame_data'length-1 loop
+                wait until rising_edge(s_axi_aclk);
+                if i mod 8 = 0 then
+                    s_axis_rx_tdata <= (others => '0');
+                    s_axis_rx_tkeep <= (others => '0');
+                end if;
+                
+                s_axis_rx_tdata((7-(i mod 8))*8+7 downto (7-(i mod 8))*8) <= frame_data(i);
+                s_axis_rx_tkeep(7-(i mod 8)) <= '1';
+                
+                if i mod 8 = 7 or i = frame_data'length-1 then
+                    s_axis_rx_tvalid <= '1';
+                    if i = frame_data'length-1 then
+                        s_axis_rx_tlast <= '1';
+                    end if;
+                    
+                    wait until rising_edge(s_axi_aclk) and s_axis_rx_tready = '1';
+                    s_axis_rx_tvalid <= '0';
+                    s_axis_rx_tlast <= '0';
+                end if;
+            end loop;
+        end procedure;
+        
+        -- Procedure to capture transmitted Ethernet frame
+        procedure capture_ethernet_frame(
+            timeout_cycles : in natural;
+            frame_data : out byte_array_t;
+            frame_length : out natural
+        ) is
+            variable byte_count : natural := 0;
+            variable cycle_count : natural := 0;
+        begin
+            -- Wait for transmission to start
+            while m_axis_tx_tvalid = '0' and cycle_count < timeout_cycles loop
+                wait until rising_edge(s_axi_aclk);
+                cycle_count := cycle_count + 1;
+            end loop;
+            
+            if cycle_count >= timeout_cycles then
+                frame_length := 0;
+                return;
+            end if;
+            
+            -- Capture frame data
+            while m_axis_tx_tvalid = '1' loop
+                wait until rising_edge(s_axi_aclk);
+                
+                for i in 0 to 7 loop
+                    if m_axis_tx_tkeep(7-i) = '1' and byte_count < frame_data'length then
+                        frame_data(byte_count) := m_axis_tx_tdata((7-i)*8+7 downto (7-i)*8);
+                        byte_count := byte_count + 1;
+                    end if;
+                end loop;
+                
+                if m_axis_tx_tlast = '1' then
+                    exit;
+                end if;
+            end loop;
+            
+            frame_length := byte_count;
+        end procedure;
     begin
         -- Initialize
         sys_rst_n <= '0';
@@ -527,21 +521,11 @@ begin
         test_start("Engine Configuration");
         
         -- Configure MAC address
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_MAC_ADDR_LOW, TEST_MAC_ADDR(31 downto 0));
-        
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_MAC_ADDR_HIGH, x"0000" & TEST_MAC_ADDR(47 downto 32));
+        axi_write(REG_MAC_ADDR_LOW, TEST_MAC_ADDR(31 downto 0));
+        axi_write(REG_MAC_ADDR_HIGH, x"0000" & TEST_MAC_ADDR(47 downto 32));
         
         -- Enable engine with DHCP
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_CONTROL, x"00000003"); -- Enable engine and DHCP
+        axi_write(REG_CONTROL, x"00000003"); -- Enable engine and DHCP
         
         test_pass("Engine Configuration");
         
@@ -551,9 +535,9 @@ begin
         test_start("DHCP Discovery Process");
         
         -- Monitor for DHCP DISCOVER transmission
-        captured_frame := capture_ethernet_frame(2000); -- Wait up to 2000 cycles
+        capture_ethernet_frame(2000, captured_frame, captured_length); -- Wait up to 2000 cycles
         
-        if captured_frame'length > 300 then
+        if captured_length > 300 then
             -- Validate DHCP DISCOVER packet
             if captured_frame(42) = x"01" and -- BOOTREQUEST
                captured_frame(242) = x"01" then -- DISCOVER message type
@@ -569,9 +553,9 @@ begin
                 wait for 2 us;
                 
                 -- Monitor for DHCP REQUEST
-                captured_frame := capture_ethernet_frame(1000);
+                capture_ethernet_frame(1000, captured_frame, captured_length);
                 
-                if captured_frame'length > 300 then
+                if captured_length > 300 then
                     if captured_frame(42) = x"01" and -- BOOTREQUEST
                        captured_frame(242) = x"03" then -- REQUEST message type
                         test_pass("DHCP REQUEST transmitted");
@@ -600,9 +584,7 @@ begin
         wait for 1 us;
         
         -- Check if packet was processed (simplified - would need status monitoring)
-        axi_read(s_axi_aclk, s_axi_araddr, s_axi_arvalid, s_axi_arready,
-                 s_axi_rready, s_axi_rvalid, s_axi_rdata,
-                 x"00000020", read_data); -- UDP status register
+        axi_read(x"00000020", read_data); -- UDP status register
         
         if read_data /= x"00000000" then
             test_pass("UDP Packet Reception");
@@ -619,11 +601,11 @@ begin
         wait for 1 us;
         
         -- Monitor for UDP transmission
-        captured_frame := capture_ethernet_frame(1000);
+        capture_ethernet_frame(1000, captured_frame, captured_length);
         
-        if captured_frame'length > 42 then
+        if captured_length > 42 then
             -- Validate UDP packet structure
-            if captured_frame(23) = IP_PROTO_UDP then -- IP protocol field
+            if captured_frame(23) = x"11" then -- IP protocol field
                 test_pass("UDP Packet Transmission");
             else
                 test_fail("UDP Packet Transmission", "Non-UDP packet transmitted");
@@ -637,14 +619,10 @@ begin
             test_start("DHCP Status Verification");
             
             -- Check DHCP completion status
-            axi_read(s_axi_aclk, s_axi_araddr, s_axi_arvalid, s_axi_arready,
-                     s_axi_rready, s_axi_rvalid, s_axi_rdata,
-                     x"00000028", read_data); -- DHCP status register
+            axi_read(x"00000028", read_data); -- DHCP status register
             
             -- Check assigned IP (simplified)
-            axi_read(s_axi_aclk, s_axi_araddr, s_axi_arvalid, s_axi_arready,
-                     s_axi_rready, s_axi_rvalid, s_axi_rdata,
-                     REG_IP_ADDR, read_data);
+            axi_read(REG_IP_ADDR, read_data);
             
             if read_data /= x"00000000" then
                 test_pass("DHCP Status Verification");

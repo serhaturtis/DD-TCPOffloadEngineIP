@@ -83,6 +83,13 @@ architecture behavioral of tcp_connection_test_tb is
     constant INITIAL_SEQ : std_logic_vector(31 downto 0) := x"12345678";
     constant REMOTE_SEQ : std_logic_vector(31 downto 0) := x"87654321";
     
+    -- Register addresses (simplified)
+    constant REG_MAC_ADDR_LOW : std_logic_vector(31 downto 0) := x"00000000";
+    constant REG_MAC_ADDR_HIGH : std_logic_vector(31 downto 0) := x"00000004";
+    constant REG_IP_ADDR : std_logic_vector(31 downto 0) := x"00000008";
+    constant REG_TCP_PORT_0 : std_logic_vector(31 downto 0) := x"00000010";
+    constant REG_CONTROL : std_logic_vector(31 downto 0) := x"00000020";
+    
     -- DUT instantiation
     component tcp_offload_engine_top is
         port (
@@ -135,132 +142,6 @@ architecture behavioral of tcp_connection_test_tb is
         );
     end component;
     
-    -- AXI4-Lite procedures
-    procedure axi_write(
-        signal clk : in std_logic;
-        signal awaddr : out std_logic_vector(31 downto 0);
-        signal awvalid : out std_logic;
-        signal awready : in std_logic;
-        signal wdata : out std_logic_vector(31 downto 0);
-        signal wstrb : out std_logic_vector(3 downto 0);
-        signal wvalid : out std_logic;
-        signal wready : in std_logic;
-        signal bready : out std_logic;
-        signal bvalid : in std_logic;
-        addr : in std_logic_vector(31 downto 0);
-        data : in std_logic_vector(31 downto 0)
-    ) is
-    begin
-        wait until rising_edge(clk);
-        awaddr <= addr;
-        awvalid <= '1';
-        wdata <= data;
-        wstrb <= "1111";
-        wvalid <= '1';
-        
-        wait until rising_edge(clk) and awready = '1';
-        awvalid <= '0';
-        
-        wait until rising_edge(clk) and wready = '1';
-        wvalid <= '0';
-        
-        bready <= '1';
-        wait until rising_edge(clk) and bvalid = '1';
-        bready <= '0';
-        
-        wait until rising_edge(clk);
-    end procedure;
-    
-    procedure axi_read(
-        signal clk : in std_logic;
-        signal araddr : out std_logic_vector(31 downto 0);
-        signal arvalid : out std_logic;
-        signal arready : in std_logic;
-        signal rready : out std_logic;
-        signal rvalid : in std_logic;
-        signal rdata : in std_logic_vector(31 downto 0);
-        addr : in std_logic_vector(31 downto 0);
-        variable data : out std_logic_vector(31 downto 0)
-    ) is
-    begin
-        wait until rising_edge(clk);
-        araddr <= addr;
-        arvalid <= '1';
-        
-        wait until rising_edge(clk) and arready = '1';
-        arvalid <= '0';
-        
-        rready <= '1';
-        wait until rising_edge(clk) and rvalid = '1';
-        data := rdata;
-        rready <= '0';
-        
-        wait until rising_edge(clk);
-    end procedure;
-    
-    -- Procedure to send Ethernet frame via RGMII
-    procedure send_ethernet_frame(
-        frame_data : byte_array_t
-    ) is
-    begin
-        -- Convert byte array to AXI stream format and send
-        for i in 0 to frame_data'length-1 loop
-            wait until rising_edge(s_axi_aclk);
-            if i mod 8 = 0 then
-                s_axis_rx_tdata <= (others => '0');
-                s_axis_rx_tkeep <= (others => '0');
-            end if;
-            
-            s_axis_rx_tdata((7-(i mod 8))*8+7 downto (7-(i mod 8))*8) <= frame_data(i);
-            s_axis_rx_tkeep(7-(i mod 8)) <= '1';
-            
-            if i mod 8 = 7 or i = frame_data'length-1 then
-                s_axis_rx_tvalid <= '1';
-                if i = frame_data'length-1 then
-                    s_axis_rx_tlast <= '1';
-                end if;
-                
-                wait until rising_edge(s_axi_aclk) and s_axis_rx_tready = '1';
-                s_axis_rx_tvalid <= '0';
-                s_axis_rx_tlast <= '0';
-            end if;
-        end loop;
-    end procedure;
-    
-    -- Function to capture transmitted Ethernet frame
-    function capture_ethernet_frame(timeout_cycles : natural) return byte_array_t is
-        variable frame_data : byte_array_t(0 to 1500); -- Max Ethernet frame
-        variable byte_count : natural := 0;
-        variable cycle_count : natural := 0;
-    begin
-        -- Wait for transmission to start
-        while m_axis_tx_tvalid = '0' and cycle_count < timeout_cycles loop
-            wait until rising_edge(s_axi_aclk);
-            cycle_count := cycle_count + 1;
-        end loop;
-        
-        if cycle_count >= timeout_cycles then
-            return frame_data(0 to 0); -- Return empty frame on timeout
-        end if;
-        
-        -- Capture frame data
-        while m_axis_tx_tvalid = '1' loop
-            wait until rising_edge(s_axi_aclk);
-            
-            for i in 0 to 7 loop
-                if m_axis_tx_tkeep(7-i) = '1' and byte_count < frame_data'length then
-                    frame_data(byte_count) := m_axis_tx_tdata((7-i)*8+7 downto (7-i)*8);
-                    byte_count := byte_count + 1;
-                end if;
-            end loop;
-            
-            if m_axis_tx_tlast = '1' then
-                exit;
-            end if;
-        end loop;
-        
-        return frame_data(0 to byte_count-1);
-    end function;
     
 begin
     
@@ -330,7 +211,120 @@ begin
         variable synack_packet : byte_array_t(0 to 53);
         variable ack_packet : byte_array_t(0 to 53);
         variable captured_frame : byte_array_t(0 to 1500);
+        variable captured_length : natural;
         variable connection_established : boolean := false;
+        
+        -- AXI4-Lite procedures
+        procedure axi_write(
+            address : in std_logic_vector(31 downto 0);
+            data : in std_logic_vector(31 downto 0)
+        ) is
+        begin
+            wait until rising_edge(s_axi_aclk);
+            s_axi_awaddr <= address;
+            s_axi_awvalid <= '1';
+            s_axi_wdata <= data;
+            s_axi_wstrb <= "1111";
+            s_axi_wvalid <= '1';
+            s_axi_bready <= '1';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_awready = '1';
+            s_axi_awvalid <= '0';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_wready = '1';
+            s_axi_wvalid <= '0';
+            s_axi_wstrb <= "0000";
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_bvalid = '1';
+            s_axi_bready <= '0';
+        end procedure;
+        
+        procedure axi_read(
+            address : in std_logic_vector(31 downto 0);
+            data : out std_logic_vector(31 downto 0)
+        ) is
+        begin
+            wait until rising_edge(s_axi_aclk);
+            s_axi_araddr <= address;
+            s_axi_arvalid <= '1';
+            s_axi_rready <= '1';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_arready = '1';
+            s_axi_arvalid <= '0';
+            
+            wait until rising_edge(s_axi_aclk) and s_axi_rvalid = '1';
+            data := s_axi_rdata;
+            s_axi_rready <= '0';
+        end procedure;
+        
+        -- Procedure to send Ethernet frame via RGMII
+        procedure send_ethernet_frame(
+            frame_data : byte_array_t
+        ) is
+        begin
+            -- Convert byte array to AXI stream format and send
+            for i in 0 to frame_data'length-1 loop
+                wait until rising_edge(s_axi_aclk);
+                if i mod 8 = 0 then
+                    s_axis_rx_tdata <= (others => '0');
+                    s_axis_rx_tkeep <= (others => '0');
+                end if;
+                
+                s_axis_rx_tdata((7-(i mod 8))*8+7 downto (7-(i mod 8))*8) <= frame_data(i);
+                s_axis_rx_tkeep(7-(i mod 8)) <= '1';
+                
+                if i mod 8 = 7 or i = frame_data'length-1 then
+                    s_axis_rx_tvalid <= '1';
+                    if i = frame_data'length-1 then
+                        s_axis_rx_tlast <= '1';
+                    end if;
+                    
+                    wait until rising_edge(s_axi_aclk) and s_axis_rx_tready = '1';
+                    s_axis_rx_tvalid <= '0';
+                    s_axis_rx_tlast <= '0';
+                end if;
+            end loop;
+        end procedure;
+        
+        -- Procedure to capture transmitted Ethernet frame
+        procedure capture_ethernet_frame(
+            timeout_cycles : in natural;
+            frame_data : out byte_array_t;
+            frame_length : out natural
+        ) is
+            variable byte_count : natural := 0;
+            variable cycle_count : natural := 0;
+        begin
+            -- Wait for transmission to start
+            while m_axis_tx_tvalid = '0' and cycle_count < timeout_cycles loop
+                wait until rising_edge(s_axi_aclk);
+                cycle_count := cycle_count + 1;
+            end loop;
+            
+            if cycle_count >= timeout_cycles then
+                frame_length := 0;
+                return;
+            end if;
+            
+            -- Capture frame data
+            while m_axis_tx_tvalid = '1' loop
+                wait until rising_edge(s_axi_aclk);
+                
+                for i in 0 to 7 loop
+                    if m_axis_tx_tkeep(7-i) = '1' and byte_count < frame_data'length then
+                        frame_data(byte_count) := m_axis_tx_tdata((7-i)*8+7 downto (7-i)*8);
+                        byte_count := byte_count + 1;
+                    end if;
+                end loop;
+                
+                if m_axis_tx_tlast = '1' then
+                    exit;
+                end if;
+            end loop;
+            
+            frame_length := byte_count;
+        end procedure;
+        
     begin
         -- Initialize
         sys_rst_n <= '0';
@@ -350,33 +344,17 @@ begin
         test_start("Engine Configuration");
         
         -- Configure MAC address
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_MAC_ADDR_LOW, TEST_MAC_ADDR(31 downto 0));
-        
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_MAC_ADDR_HIGH, x"0000" & TEST_MAC_ADDR(47 downto 32));
+        axi_write(REG_MAC_ADDR_LOW, TEST_MAC_ADDR(31 downto 0));
+        axi_write(REG_MAC_ADDR_HIGH, x"0000" & TEST_MAC_ADDR(47 downto 32));
         
         -- Configure IP address
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_IP_ADDR, TEST_IP_ADDR);
+        axi_write(REG_IP_ADDR, TEST_IP_ADDR);
         
         -- Configure TCP listening port
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_TCP_PORT_0, x"0000" & LOCAL_PORT);
+        axi_write(REG_TCP_PORT_0, x"0000" & LOCAL_PORT);
         
         -- Enable TCP engine
-        axi_write(s_axi_aclk, s_axi_awaddr, s_axi_awvalid, s_axi_awready,
-                  s_axi_wdata, s_axi_wstrb, s_axi_wvalid, s_axi_wready,
-                  s_axi_bready, s_axi_bvalid,
-                  REG_CONTROL, x"00000005"); -- Enable engine and TCP
+        axi_write(REG_CONTROL, x"00000005"); -- Enable engine and TCP
         
         test_pass("Engine Configuration");
         
@@ -399,14 +377,14 @@ begin
         wait for 2 us;
         
         -- Capture SYN-ACK response
-        captured_frame := capture_ethernet_frame(1000); -- Wait up to 1000 cycles
+        capture_ethernet_frame(1000, captured_frame, captured_length); -- Wait up to 1000 cycles
         
-        if captured_frame'length > 50 then
+        if captured_length > 50 then
             -- Validate SYN-ACK packet structure
             if captured_frame(34) & captured_frame(35) = LOCAL_PORT and -- Source port
                captured_frame(36) & captured_frame(37) = REMOTE_PORT and -- Dest port  
-               captured_frame(47)(TCP_FLAG_SYN) = '1' and -- SYN flag
-               captured_frame(47)(TCP_FLAG_ACK) = '1' then -- ACK flag
+               captured_frame(47)(1) = '1' and -- SYN flag
+               captured_frame(47)(4) = '1' then -- ACK flag
                 test_pass("TCP Passive Connection - SYN Reception");
                 
                 -- Send ACK to complete handshake
@@ -429,9 +407,7 @@ begin
                 wait for 1 us;
                 
                 -- Check TCP connection state
-                axi_read(s_axi_aclk, s_axi_araddr, s_axi_arvalid, s_axi_arready,
-                         s_axi_rready, s_axi_rvalid, s_axi_rdata,
-                         x"00000030", read_data); -- TCP status register
+                axi_read(x"00000030", read_data); -- TCP status register
                 
                 -- Simplified state check (would need proper state decoding)
                 if read_data /= x"00000000" then

@@ -514,6 +514,7 @@ package body tcp_protocol_tb_pkg is
         variable frame_length : out natural;
         variable frame_valid : out boolean
     ) is
+        variable byte_count : natural := 0;
     begin
         -- Simplified RGMII reception
         frame_length := 0;
@@ -524,13 +525,15 @@ package body tcp_protocol_tb_pkg is
         frame_valid := true;
         
         -- Receive frame data
-        while rx_ctl = '1' and frame_length < frame_data'length loop
+        while rx_ctl = '1' and byte_count < frame_data'length loop
             wait until rising_edge(clk);
-            frame_data(frame_length)(3 downto 0) := rxd;
+            frame_data(byte_count)(3 downto 0) := rxd;
             wait until falling_edge(clk);
-            frame_data(frame_length)(7 downto 4) := rxd;
-            frame_length := frame_length + 1;
+            frame_data(byte_count)(7 downto 4) := rxd;
+            byte_count := byte_count + 1;
         end loop;
+        
+        frame_length := byte_count;
     end procedure;
     
     -- Test reporting procedures (simplified without shared variables)
