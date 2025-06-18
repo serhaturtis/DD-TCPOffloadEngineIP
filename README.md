@@ -183,13 +183,13 @@ See [Architecture Guide](docs/ARCHITECTURE.md) for detailed design.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under a modified version of the MIT License with an exception (Erhan IPEK) - see the [LICENSE](LICENSE) file for details.
 
 ## 🏷️ Status
 
 **Current Version**: 1.0.0-beta  
 **Status**: Development/Testing  
-**Last Updated**: 2024-06-17
+**Last Updated**: 2025-06-17
 
 ### Readiness Levels
 - 🟢 **Development Ready**: Core infrastructure complete
